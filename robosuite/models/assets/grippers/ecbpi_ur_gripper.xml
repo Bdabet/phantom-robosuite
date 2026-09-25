@@ -1,0 +1,67 @@
+<mujoco model="ecbpi_ur_gripper_model">
+  <!--
+    Second, more complete ECBPi variant: built from the "Robots set ECBPi UR"
+    TraceParts export (10.03.01.00504, ROB-SET ECBPi UR), which is the full
+    handling set (mount flange + pump + valve block + suction cup) rather than
+    just the bare pump ("ECBPiGripper" / ecbpi_gripper.xml, from 10.03.01.00314).
+    Converted via Cad_files/split_ecbpi_ur_3dxml.py, which also splits the
+    assembly into two meshes so the cup can carry its own small bellows joint:
+      - ecbpi_ur_body.obj: flange + pump housing (static)
+      - ecbpi_ur_cup.obj: valve block + suction cup (moves on cup_bellows_joint)
+    As with ecbpi_gripper.xml, this joint is only a visual on/off cue for
+    suction engage/idle; there is no functional grasp physics in this pipeline.
+
+    Both meshes came from the same 3DXML assembly with identity part
+    transforms, so they share one raw coordinate system; the single pos/quat
+    below (empirically aligned by rendering, see split script's docstring)
+    places both consistently without needing per-mesh offsets.
+  -->
+  <compiler angle="radian" autolimits="true"/>
+
+  <asset>
+    <mesh name="ecbpi_ur_body" file="meshes/ecbpi_ur/ecbpi_ur_body.obj"/>
+    <mesh name="ecbpi_ur_cup" file="meshes/ecbpi_ur/ecbpi_ur_cup.obj"/>
+    <material name="ecbpi_ur_housing" rgba="0.6 0.62 0.65 1"/>
+    <material name="ecbpi_ur_cup_mat" rgba="0.1 0.1 0.1 1"/>
+  </asset>
+
+  <worldbody>
+    <body name="base_mount" pos="0 0 0">
+      <site name="ft_frame" pos="0 0 0" size="0.01 0.01 0.01" rgba="1 0 0 1" type="sphere" group="1"/>
+      <inertial mass="0.5" pos="0 0 0.08" diaginertia="6e-4 6e-4 3e-4"/>
+
+      <!-- Flange + pump housing (visual only; no collision geom, since nothing ever contacts this gripper in this pipeline) -->
+      <geom type="mesh" mesh="ecbpi_ur_body" pos="0 0 0.008133" quat="0.7071068 -0.7071068 0 0"
+            material="ecbpi_ur_housing" contype="0" conaffinity="0" group="1"/>
+
+      <body name="eef" pos="0 0 0.20" quat="0.707105 0 0 -0.707105">
+        <site name="grip_site" pos="0 0 0" size="0.01 0.01 0.01" rgba="1 0 0 0.5" type="sphere"/>
+        <site name="ee_x" pos="0.1 0 0" size="0.005 .1" quat="0.707105 0 0.707108 0" rgba="1 0 0 0" type="cylinder"/>
+        <site name="ee_y" pos="0 0.1 0" size="0.005 .1" quat="0.707105 0.707108 0 0" rgba="0 1 0 0" type="cylinder"/>
+        <site name="ee_z" pos="0 0 0.1" size="0.005 .1" quat="1 0 0 0" rgba="0 0 1 0" type="cylinder"/>
+        <!-- This site was added for visualization. -->
+        <site name="grip_site_cylinder" pos="0 0 0" size="0.005 10" rgba="0 1 0 0.3" type="cylinder"/>
+      </body>
+
+      <!--
+        Cup + valve block: same pos/quat as the body geom above (both meshes
+        share one raw coordinate frame), so the joint's z-axis lines up with
+        the gripper's tool axis without any further offset math.
+      -->
+      <body name="cup_assembly" pos="0 0 0.008133" quat="0.7071068 -0.7071068 0 0">
+        <inertial mass="0.03" pos="0 0 0.13" diaginertia="1e-6 1e-6 1e-6"/>
+        <joint name="cup_bellows_joint" type="slide" axis="0 0 1" range="-0.01 0" damping="5" stiffness="200" springref="0"/>
+        <geom type="mesh" mesh="ecbpi_ur_cup" material="ecbpi_ur_cup_mat" contype="0" conaffinity="0" group="1"/>
+      </body>
+    </body>
+  </worldbody>
+
+  <actuator>
+    <position name="cup_actuator" joint="cup_bellows_joint" ctrlrange="-0.01 0" kp="80"/>
+  </actuator>
+
+  <sensor>
+    <force name="force_ee" site="ft_frame"/>
+    <torque name="torque_ee" site="ft_frame"/>
+  </sensor>
+</mujoco>

@@ -23,10 +23,12 @@ class Manipulator(Robot):
         """
         actuator_idxs = [self.sim.model.actuator_name2id(actuator) for actuator in gripper.actuators]
         if self.direct_gripper_control:
-            if "Robotiq85" in gripper.name:
+            if len(actuator_idxs) == 1:
                 applied_gripper_action = gripper_action[0]
-            else:
+            elif len(actuator_idxs) == 2:
                 applied_gripper_action = [gripper_action[0], -gripper_action[0]]
+            else:
+                raise ValueError(f"direct_gripper_control does not support {len(actuator_idxs)}-actuator grippers")
         else:
             gripper_action_actual = gripper.format_action(gripper_action)
             # rescale normalized gripper action to control ranges

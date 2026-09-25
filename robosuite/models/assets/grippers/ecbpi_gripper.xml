@@ -1,0 +1,75 @@
+<mujoco model="ecbpi_gripper_model">
+  <!--
+    Placeholder geometry for the Schmalz ECBPi electric vacuum gripper: no vendor
+    CAD/mesh was available at authoring time, so the housing and suction cup are
+    approximated with MuJoCo primitives (cylinders) at roughly the real product's
+    scale (~90mm housing diameter, ~150mm overall length). Swap in real meshes
+    under models/assets/grippers/meshes/ecbpi/ and reference them here once a
+    STEP/STL export is obtained (e.g. via Schmalz's CAD download page or TraceParts).
+
+    Unlike the two-finger Robotiq85 gripper, the ECBPi has no external moving
+    linkage (it's an electric vacuum generator, not a mechanical jaw). The single
+    "cup_bellows_joint" here is a small (1cm) linear slide standing in for the
+    suction cup's real bellows compliance, purely so there's a visible on/off
+    engaged vs idle cue; it carries no functional grasp physics.
+
+    The housing mesh (ecbpi_pump.obj) is the real Schmalz "CobotPump" (ECBPi 12
+    24V-DC M12-8) part, converted from a TraceParts 3DXML export via
+    Cad_files/convert_3dxml_to_obj.py (see that script for the format notes).
+    Only the vacuum generator/pump body was available; the suction cup and
+    stem below it are still placeholder primitives since that accessory's CAD
+    wasn't part of this export. The mesh's mount flange is oriented to sit at
+    this body's origin (the arm-facing end), with the pump housing extending
+    out along +Z toward the cup, via the geom's quat/pos below (empirically
+    aligned by rendering, since the 3DXML export carries no named datum axes).
+  -->
+  <compiler angle="radian" autolimits="true"/>
+
+  <asset>
+    <mesh name="ecbpi_pump" file="meshes/ecbpi/ecbpi_pump.obj"/>
+    <material name="ecbpi_housing" rgba="0.55 0.58 0.62 1"/>
+    <material name="ecbpi_cup" rgba="0.08 0.08 0.08 1"/>
+  </asset>
+
+  <worldbody>
+    <body name="base_mount" pos="0 0 0">
+      <site name="ft_frame" pos="0 0 0" size="0.01 0.01 0.01" rgba="1 0 0 1" type="sphere" group="1"/>
+      <inertial mass="0.4" pos="0 0 0.05" diaginertia="4e-4 4e-4 2e-4"/>
+
+      <!-- Housing (visual + collision) -->
+      <geom type="mesh" mesh="ecbpi_pump" pos="0 0 0.023" quat="0.7071068 -0.7071068 0 0" material="ecbpi_housing" contype="0" conaffinity="0" group="1"/>
+      <geom type="mesh" mesh="ecbpi_pump" pos="0 0 0.023" quat="0.7071068 -0.7071068 0 0"/>
+
+      <body name="eef" pos="0 0 0.15" quat="0.707105 0 0 -0.707105">
+        <site name="grip_site" pos="0 0 0" size="0.01 0.01 0.01" rgba="1 0 0 0.5" type="sphere"/>
+        <site name="ee_x" pos="0.1 0 0" size="0.005 .1" quat="0.707105 0 0.707108 0" rgba="1 0 0 0" type="cylinder"/>
+        <site name="ee_y" pos="0 0.1 0" size="0.005 .1" quat="0.707105 0.707108 0 0" rgba="0 1 0 0" type="cylinder"/>
+        <site name="ee_z" pos="0 0 0.1" size="0.005 .1" quat="1 0 0 0" rgba="0 0 1 0" type="cylinder"/>
+        <!-- This site was added for visualization. -->
+        <site name="grip_site_cylinder" pos="0 0 0" size="0.005 10" rgba="0 1 0 0.3" type="cylinder"/>
+      </body>
+
+      <!-- Stem + suction cup, hanging off the housing along the tool axis -->
+      <body name="cup_mount" pos="0 0 0.09">
+        <geom type="cylinder" size="0.008 0.02" pos="0 0 0.02" material="ecbpi_housing" contype="0" conaffinity="0" group="1"/>
+        <geom type="cylinder" size="0.008 0.02" pos="0 0 0.02"/>
+
+        <body name="suction_cup" pos="0 0 0.04">
+          <inertial mass="0.02" pos="0 0 0" diaginertia="1e-6 1e-6 1e-6"/>
+          <joint name="cup_bellows_joint" type="slide" axis="0 0 1" range="-0.01 0" damping="5" stiffness="200" springref="0"/>
+          <geom name="suction_cup_geom" type="cylinder" size="0.022 0.004" pos="0 0 0" material="ecbpi_cup" contype="0" conaffinity="0" group="1"/>
+          <geom type="cylinder" size="0.022 0.004" pos="0 0 0"/>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+
+  <actuator>
+    <position name="cup_actuator" joint="cup_bellows_joint" ctrlrange="-0.01 0" kp="80"/>
+  </actuator>
+
+  <sensor>
+    <force name="force_ee" site="ft_frame"/>
+    <torque name="torque_ee" site="ft_frame"/>
+  </sensor>
+</mujoco>
