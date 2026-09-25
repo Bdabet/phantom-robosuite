@@ -3,6 +3,7 @@ import numpy as np
 from robosuite.environments.manipulation.single_arm_env import SingleArmEnv
 from robosuite.models.arenas import PhantomTableArena
 from robosuite.models.tasks import ManipulationTask
+from robosuite.utils.mjcf_utils import array_to_string, find_elements, new_element
 
 
 class Phantom(SingleArmEnv):
@@ -165,6 +166,11 @@ class Phantom(SingleArmEnv):
         camera_sensorsize=None,
         camera_principalpixel=None,
         camera_focalpixel=None,
+        wrist_camera_pos=None,
+        wrist_camera_quat_wxyz=None,
+        wrist_camera_sensorsize=None,
+        wrist_camera_principalpixel=None,
+        wrist_camera_focalpixel=None,
     ):
 
         # settings for table top
@@ -189,6 +195,11 @@ class Phantom(SingleArmEnv):
         self.camera_sensorsize = camera_sensorsize
         self.camera_principalpixel = camera_principalpixel
         self.camera_focalpixel = camera_focalpixel
+        self.wrist_camera_pos = wrist_camera_pos
+        self.wrist_camera_quat_wxyz = wrist_camera_quat_wxyz
+        self.wrist_camera_sensorsize = wrist_camera_sensorsize
+        self.wrist_camera_principalpixel = wrist_camera_principalpixel
+        self.wrist_camera_focalpixel = wrist_camera_focalpixel
 
         # pdb.set_trace()
 
@@ -262,6 +273,30 @@ class Phantom(SingleArmEnv):
                                 "principalpixel": np.array2string(self.camera_principalpixel)[1:-1],
                                 "focalpixel": np.array2string(self.camera_focalpixel)[1:-1],}
             )
+
+        # Attach an optional wrist camera to the eef ("flange") body, so its pos/quat
+        # are local to the flange frame rather than world coordinates.
+        if self.wrist_camera_pos is not None:
+            eef_body = find_elements(
+                root=self.robots[0].robot_model.root,
+                tags="body",
+                attribs={"name": self.robots[0].robot_model.eef_name},
+                return_first=True,
+            )
+            camera_attribs = {
+                "sensorsize": np.array2string(self.wrist_camera_sensorsize)[1:-1],
+                "resolution": f"{self.camera_widths[0]} {self.camera_heights[0]}",
+                "principalpixel": np.array2string(self.wrist_camera_principalpixel)[1:-1],
+                "focalpixel": np.array2string(self.wrist_camera_focalpixel)[1:-1],
+                "pos": array_to_string(self.wrist_camera_pos),
+                "quat": array_to_string(self.wrist_camera_quat_wxyz),
+            }
+            wrist_camera = find_elements(root=eef_body, tags="camera", attribs={"name": "wristview"}, return_first=True)
+            if wrist_camera is None:
+                eef_body.append(new_element(tag="camera", name="wristview", **camera_attribs))
+            else:
+                for attrib, value in camera_attribs.items():
+                    wrist_camera.set(attrib, value)
 
     def _setup_references(self):
         """
