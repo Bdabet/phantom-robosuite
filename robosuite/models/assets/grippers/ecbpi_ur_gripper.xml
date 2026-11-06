@@ -30,11 +30,18 @@
       <site name="ft_frame" pos="0 0 0" size="0.01 0.01 0.01" rgba="1 0 0 1" type="sphere" group="1"/>
       <inertial mass="0.5" pos="0 0 0.08" diaginertia="6e-4 6e-4 3e-4"/>
 
-      <!-- Flange + pump housing (visual only; no collision geom, since nothing ever contacts this gripper in this pipeline) -->
-      <geom type="mesh" mesh="ecbpi_ur_body" pos="0 0 0.008133" quat="0.7071068 -0.7071068 0 0"
+      <!--
+        Flange + pump housing (visual only; no collision geom, since nothing ever contacts this gripper in this pipeline).
+        The CAD origin is not on the tool axis: in this frame both the flange plate and the cup
+        tip are centred at (-0.0006, +0.0635), so the meshes are shifted by (0.0006, -0.0635) to
+        put them on the robot flange (x = y = 0).
+      -->
+      <geom type="mesh" mesh="ecbpi_ur_body" pos="0.0006 -0.0635 0.008133" quat="0.7071068 -0.7071068 0 0"
             material="ecbpi_ur_housing" contype="0" conaffinity="0" group="1"/>
 
-      <body name="eef" pos="0 0 0.20" quat="0.707105 0 0 -0.707105">
+      <!-- Grip site at the suction cup's lip with suction off (cup tip z = 0.1891), the point
+           that first touches the object; engaging pulls the cup 1 cm further up. -->
+      <body name="eef" pos="0 0 0.1891" quat="0.707105 0 0 -0.707105">
         <site name="grip_site" pos="0 0 0" size="0.01 0.01 0.01" rgba="1 0 0 0.5" type="sphere"/>
         <site name="ee_x" pos="0.1 0 0" size="0.005 .1" quat="0.707105 0 0.707108 0" rgba="1 0 0 0" type="cylinder"/>
         <site name="ee_y" pos="0 0.1 0" size="0.005 .1" quat="0.707105 0.707108 0 0" rgba="0 1 0 0" type="cylinder"/>
@@ -45,12 +52,14 @@
 
       <!--
         Cup + valve block: same pos/quat as the body geom above (both meshes
-        share one raw coordinate frame), so the joint's z-axis lines up with
-        the gripper's tool axis without any further offset math.
+        share one raw coordinate frame). The quat maps raw (x, y, z) to
+        (x, z, -y), so the tool axis (+z here) is raw -y: the joint axis is
+        "0 -1 0", and engaging (q -> -0.01) pulls the cup 1 cm up towards the
+        flange instead of sliding it sideways.
       -->
-      <body name="cup_assembly" pos="0 0 0.008133" quat="0.7071068 -0.7071068 0 0">
-        <inertial mass="0.03" pos="0 0 0.13" diaginertia="1e-6 1e-6 1e-6"/>
-        <joint name="cup_bellows_joint" type="slide" axis="0 0 1" range="-0.01 0" damping="5" stiffness="200" springref="0"/>
+      <body name="cup_assembly" pos="0.0006 -0.0635 0.008133" quat="0.7071068 -0.7071068 0 0">
+        <inertial mass="0.03" pos="-0.0006 -0.139 0.0635" diaginertia="1e-6 1e-6 1e-6"/>
+        <joint name="cup_bellows_joint" type="slide" axis="0 -1 0" range="-0.01 0" damping="5" stiffness="200" springref="0"/>
         <geom type="mesh" mesh="ecbpi_ur_cup" material="ecbpi_ur_cup_mat" contype="0" conaffinity="0" group="1"/>
       </body>
     </body>
