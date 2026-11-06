@@ -1,8 +1,11 @@
+import xml.etree.ElementTree as ET
+
 import numpy as np
 
 import robosuite.utils.transform_utils as T
 from robosuite.environments.manipulation.single_arm_env import SingleArmEnv
 from robosuite.models.arenas import PhantomTableArena
+from robosuite.models.objects import BoxObject, CylinderObject
 from robosuite.models.tasks import ManipulationTask
 from robosuite.utils.mjcf_utils import array_to_string, find_elements, new_element
 
@@ -174,6 +177,7 @@ class Phantom(SingleArmEnv):
         wrist_camera_focalpixel=None,
         show_wrist_camera=False,
         wrist_camera_box_size=(0.09, 0.025, 0.025),
+        grasp_object=None,
     ):
 
         # settings for table top
@@ -205,6 +209,12 @@ class Phantom(SingleArmEnv):
         self.wrist_camera_focalpixel = wrist_camera_focalpixel
         self.show_wrist_camera = show_wrist_camera
         self.wrist_camera_box_size = np.array(wrist_camera_box_size, dtype=float)
+
+        # Optional object the gripper can "pick up". It has no collision geometry: it is
+        # held by weld constraints that set_suction() swaps between the world and the
+        # gripper. dict(type="box"|"cylinder", size=<half extents>, rgba=<4 floats>).
+        self.grasp_object_cfg = dict(grasp_object) if grasp_object else None
+        self.grasp_object = None
 
         # pdb.set_trace()
 
@@ -260,11 +270,16 @@ class Phantom(SingleArmEnv):
         # Arena always gets set to zero origin
         mujoco_arena.set_origin([0, 0, 0])
 
+        self.grasp_object = self._build_grasp_object()
+
         # task includes arena, robot, and objects of interest
         self.model = ManipulationTask(
             mujoco_arena=mujoco_arena,
             mujoco_robots=[robot.robot_model for robot in self.robots],
+            mujoco_objects=[self.grasp_object] if self.grasp_object is not None else None,
         )
+        if self.grasp_object is not None:
+            self._add_grasp_welds()
 
         # Modify default frontview camera
         if self.camera_pos is not None:
@@ -336,6 +351,128 @@ class Phantom(SingleArmEnv):
                 if geom_name not in robot_model._visual_geoms:
                     robot_model._visual_geoms.append(geom_name)
 
+    # ---- optional grasp object: kinematic "suction" via weld constraints ----------------
+    # The gripper models here have no collision geometry, so there is no contact grasp.
+    # Instead the object is always welded to something: the world while it rests, the
+    # gripper's flange body while suction is on. Swapping which weld is active (rather
+    # than writing qpos after env.step) keeps the attachment exact inside every physics
+    # substep, so the frame rendered by env.step already shows the object where it is.
+    WORLD_WELD = "grasp_world_weld"
+    GRIP_WELD = "grasp_grip_weld"
+
+    def _build_grasp_object(self):
+        cfg = self.grasp_object_cfg
+        if cfg is None:
+            return None
+        kind = cfg.get("type", "box")
+        kwargs = dict(
+            name="grasp_object",
+            size=cfg.get("size"),
+            rgba=cfg.get("rgba", (0.8, 0.3, 0.2, 1.0)),
+            density=cfg.get("density", 100.0),
+            obj_type="visual",  # no contact geoms: nothing may collide with it
+        )
+        if kind == "box":
+            return BoxObject(**kwargs)
+        if kind == "cylinder":
+            return CylinderObject(**kwargs)
+        raise ValueError(f"grasp_object type must be 'box' or 'cylinder', got {kind!r}")
+
+    def _add_grasp_welds(self):
+        obj = self.grasp_object
+        body = find_elements(root=self.model.worldbody, tags="body",
+                             attribs={"name": obj.root_body}, return_first=True)
+        # Cancel gravity on the object so the (soft) welds do not sag under its weight.
+        body.set("gravcomp", "1")
+        # Visual-only geoms carry no mass and a free body needs some, so give it a token one.
+        body.append(ET.Element("inertial", pos="0 0 0", mass="0.05", diaginertia="1e-4 1e-4 1e-4"))
+        for name, body1, active in ((self.WORLD_WELD, "world", "true"), (self.GRIP_WELD, self._grasp_body(), "false")):
+            self.model.equality.append(
+                new_element(tag="weld", name=name, body1=body1, body2=obj.root_body, active=active))
+
+    def _grasp_body(self):
+        """
+        Body the object is welded to while suction is on: the suction cup's own body if
+        the gripper has one (ECBPiUR's cup_assembly, which the bellows pull up on engage,
+        so the object rises with it), else the robot's flange body.
+        """
+        cup = [b for b in self.robots[0].gripper.bodies if b.endswith("cup_assembly")]
+        return cup[0] if cup else self.robots[0].robot_model.eef_name
+
+    def _eq_id(self, name):
+        import mujoco
+        return mujoco.mj_name2id(self.sim.model._model, mujoco.mjtObj.mjOBJ_EQUALITY, name)
+
+    def _set_weld_active(self, name, active):
+        eq = self._eq_id(name)
+        data = self.sim.data._data
+        # mjData.eq_active exists from MuJoCo 3; earlier versions keep it on the model.
+        if hasattr(data, "eq_active"):
+            data.eq_active[eq] = int(active)
+        else:
+            self.sim.model._model.eq_active[eq] = int(active)
+
+    def _set_weld_relpose(self, name, body1, body2):
+        """Pin weld `name` to the current pose of body2 expressed in body1's frame."""
+        import mujoco
+        model, data = self.sim.model, self.sim.data
+        b1, b2 = model.body_name2id(body1), model.body_name2id(body2)
+        p1, q1 = data.body_xpos[b1].copy(), data.body_xquat[b1].copy()
+        p2, q2 = data.body_xpos[b2].copy(), data.body_xquat[b2].copy()
+        q1_inv = np.zeros(4)
+        mujoco.mju_negQuat(q1_inv, q1)
+        rel_pos, rel_quat = np.zeros(3), np.zeros(4)
+        mujoco.mju_rotVecQuat(rel_pos, p2 - p1, q1_inv)
+        mujoco.mju_mulQuat(rel_quat, q1_inv, q2)
+        eq = self._eq_id(name)
+        # weld eq_data layout: anchor(3) | relative position(3) | relative quat wxyz(4) | torquescale
+        model._model.eq_data[eq, 0:3] = 0.0
+        model._model.eq_data[eq, 3:6] = rel_pos
+        model._model.eq_data[eq, 6:10] = rel_quat
+
+    def _zero_object_velocity(self):
+        start, end = self.sim.model.get_joint_qvel_addr(self.grasp_object.joints[0])
+        self.sim.data.qvel[start:end] = 0.0
+
+    def set_object_pose(self, pos, quat_wxyz):
+        """Teleport the grasp object (world frame) and leave it resting, suction off."""
+        assert self.grasp_object is not None, "env was created without grasp_object"
+        obj = self.grasp_object
+        self.sim.data.set_joint_qpos(obj.joints[0], np.concatenate([pos, quat_wxyz]))
+        self._zero_object_velocity()
+        self.sim.forward()
+        self._set_weld_relpose(self.WORLD_WELD, "world", obj.root_body)
+        self._set_weld_active(self.GRIP_WELD, False)
+        self._set_weld_active(self.WORLD_WELD, True)
+        self.suction_on = False
+
+    def set_suction(self, on):
+        """
+        Suction on: weld the object to the gripper at its current relative pose.
+        Suction off: weld it to the world where it currently is. No-op if unchanged.
+        """
+        assert self.grasp_object is not None, "env was created without grasp_object"
+        if bool(on) == getattr(self, "suction_on", False):
+            return
+        obj = self.grasp_object
+        self.sim.forward()
+        if on:
+            self._set_weld_relpose(self.GRIP_WELD, self._grasp_body(), obj.root_body)
+            self._set_weld_active(self.WORLD_WELD, False)
+            self._set_weld_active(self.GRIP_WELD, True)
+        else:
+            self._zero_object_velocity()
+            self._set_weld_relpose(self.WORLD_WELD, "world", obj.root_body)
+            self._set_weld_active(self.GRIP_WELD, False)
+            self._set_weld_active(self.WORLD_WELD, True)
+        self.suction_on = bool(on)
+
+    def get_object_pose(self):
+        """(pos (3,), quat_xyzw (4,)) of the grasp object in the world frame."""
+        bid = self.sim.model.body_name2id(self.grasp_object.root_body)
+        return (self.sim.data.body_xpos[bid].copy(),
+                T.convert_quat(self.sim.data.body_xquat[bid].copy(), to="xyzw"))
+
     def _setup_references(self):
         """
         Sets up references to important components. A reference is typically an
@@ -350,7 +487,8 @@ class Phantom(SingleArmEnv):
         Resets simulation internal configurations.
         """
         super()._reset_internal()
-
+        # A hard reset rebuilds the sim with the welds in their XML state (world weld on).
+        self.suction_on = False
 
     def visualize(self, vis_settings):
         """
