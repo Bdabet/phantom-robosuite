@@ -1,5 +1,6 @@
 import numpy as np
 
+import robosuite.utils.transform_utils as T
 from robosuite.environments.manipulation.single_arm_env import SingleArmEnv
 from robosuite.models.arenas import PhantomTableArena
 from robosuite.models.tasks import ManipulationTask
@@ -171,6 +172,8 @@ class Phantom(SingleArmEnv):
         wrist_camera_sensorsize=None,
         wrist_camera_principalpixel=None,
         wrist_camera_focalpixel=None,
+        show_wrist_camera=False,
+        wrist_camera_box_size=(0.09, 0.025, 0.025),
     ):
 
         # settings for table top
@@ -200,6 +203,8 @@ class Phantom(SingleArmEnv):
         self.wrist_camera_sensorsize = wrist_camera_sensorsize
         self.wrist_camera_principalpixel = wrist_camera_principalpixel
         self.wrist_camera_focalpixel = wrist_camera_focalpixel
+        self.show_wrist_camera = show_wrist_camera
+        self.wrist_camera_box_size = np.array(wrist_camera_box_size, dtype=float)
 
         # pdb.set_trace()
 
@@ -297,6 +302,39 @@ class Phantom(SingleArmEnv):
             else:
                 for attrib, value in camera_attribs.items():
                     wrist_camera.set(attrib, value)
+
+            # Optionally add a box standing in for the camera housing, so the wrist camera
+            # is visible from other cameras (e.g. frontview). Box size is full (w, h, depth)
+            # in the camera frame; it sits just behind the lens (MuJoCo cameras look along
+            # -z) so it doesn't occlude the wrist view itself.
+            if self.show_wrist_camera:
+                robot_model = self.robots[0].robot_model
+                geom_name = "wristview_box_vis"
+                half_size = self.wrist_camera_box_size / 2
+                cam_rot = T.quat2mat(T.convert_quat(np.array(self.wrist_camera_quat_wxyz), to="xyzw"))
+                box_pos = np.array(self.wrist_camera_pos) + cam_rot @ np.array([0, 0, half_size[2]])
+                box_attribs = {
+                    "type": "box",
+                    "size": array_to_string(half_size),
+                    "pos": array_to_string(box_pos),
+                    "quat": array_to_string(self.wrist_camera_quat_wxyz),
+                    "rgba": "0.1 0.1 0.1 1",
+                    "contype": "0",
+                    "conaffinity": "0",
+                    "group": "1",
+                    "mass": "0",
+                }
+                box = find_elements(root=eef_body, tags="geom",
+                                    attribs={"name": robot_model.naming_prefix + geom_name}, return_first=True)
+                if box is None:
+                    eef_body.append(new_element(tag="geom", name=robot_model.naming_prefix + geom_name, **box_attribs))
+                else:
+                    for attrib, value in box_attribs.items():
+                        box.set(attrib, value)
+                # Register with the robot model so instance segmentation counts it as robot
+                # (robot_mask); correct_naming() re-adds the prefix.
+                if geom_name not in robot_model._visual_geoms:
+                    robot_model._visual_geoms.append(geom_name)
 
     def _setup_references(self):
         """
